@@ -1,0 +1,12 @@
+diffusers>=0.33.0
+huggingface_hub
+accelerate
+transformers
+omegaconf
+pytorch360convert
+safetensors
+matplotlib
+trimesh
+
+# Optional (enable memory-efficient attention when available)
+# xformers>=0.0.23
