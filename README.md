@@ -137,11 +137,11 @@ Put citations here
 
 ## 🎫 License
 
-This code of this work is licensed under the Apache License, Version 2.0 (as defined in the [LICENSE](LICENSE.txt)).
+This code of this work is licensed under the Apache License, Version 2.0 (as defined in the [LICENSE](LICENSE)).
 
-The models are licensed under RAIL++-M License (as defined in the [LICENSE-MODEL](LICENSE-MODEL.txt))
+The models are licensed under RAIL++-M License (as defined in the [LICENSE-MODEL](LICENSE-MODEL))
 
-By downloading and using the code and model you agree to the terms in [LICENSE](LICENSE.txt) and [LICENSE-MODEL](LICENSE-MODEL.txt) respectively.
+By downloading and using the code and model you agree to the terms in [LICENSE](LICENSE) and [LICENSE-MODEL](LICENSE-MODEL) respectively.
 
 ## Acknowledgements
 
