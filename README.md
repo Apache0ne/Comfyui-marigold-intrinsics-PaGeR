@@ -126,3 +126,28 @@ Install with:
 ```bash
 pip install -r requirements.txt
 ```
+
+## 🎓 Citation
+
+Please cite our paper:  (Waiting for Citation)
+
+```bibtex
+Put citations here
+```
+
+## 🎫 License
+
+This code of this work is licensed under the Apache License, Version 2.0 (as defined in the [LICENSE](LICENSE.txt)).
+
+The models are licensed under RAIL++-M License (as defined in the [LICENSE-MODEL](LICENSE-MODEL.txt))
+
+By downloading and using the code and model you agree to the terms in [LICENSE](LICENSE.txt) and [LICENSE-MODEL](LICENSE-MODEL.txt) respectively.
+
+## Acknowledgements
+
+This project builds upon and is inspired by the following repositories and works:
+
+- [Marigold-e2e-ft](https://github.com/VisualComputingInstitute/diffusion-e2e-ft), based on paper [Fine-Tuning Image-Conditional Diffusion Models is Easier than You Think](https://arxiv.org/abs/2409.11355).
+- [Marigold](https://github.com/prs-eth/Marigold/tree/main), based on paper [Repurposing Diffusion-Based Image Generators for Monocular Depth Estimation](https://arxiv.org/abs/2312.02145).
+
+We thank the authors and maintainers for making their code publicly available.
