@@ -4,6 +4,9 @@ This custom node pack provides Marigold IID nodes and PaGeR ERP geometry nodes.
 ![pack](https://github.com/Apache0ne/Comfyui-marigold-intrinsics-PaGeR/blob/main/examples/node-examples.png)
 ## Included Nodes
 
+TODO: missing PaGeR-Normals 
+PaGer models 5/6
+
 ### Marigold IID Loaders
 
 1. `Load Marigold IID Appearance Model` (`DownloadAndLoadMarigoldIIDAppearanceModel`)
