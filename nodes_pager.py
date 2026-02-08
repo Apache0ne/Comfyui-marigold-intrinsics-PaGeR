@@ -15,11 +15,7 @@ from comfy.utils import ProgressBar
 import folder_paths
 
 from .nodes_shared import (
-    EMPTY_PROMPT_FILENAME_PAGER,
     STORAGE_DIRNAME,
-    _conditioning_filename_choices,
-    _ensure_base_files as _ensure_shared_base_files,
-    _load_precomputed_conditioning,
     _mask_to_keep,
     _require_module,
     _select_torch_dtype,
@@ -40,19 +36,7 @@ DEFAULT_DEPTH_RANGE = math.log(75.0)
 
 _BASE_REQUIRED_FILES = [
     "scheduler/scheduler_config.json",
-    "tokenizer/merges.txt",
-    "tokenizer/special_tokens_map.json",
-    "tokenizer/tokenizer_config.json",
-    "tokenizer/vocab.json",
-    "text_encoder/config.json",
     "vae/config.json",
-]
-
-_TEXT_ENCODER_WEIGHT_CANDIDATES = [
-    "text_encoder/model.safetensors",
-    "text_encoder/pytorch_model.bin",
-    "text_encoder/model.fp16.safetensors",
-    "text_encoder/pytorch_model.fp16.bin",
 ]
 
 _VAE_WEIGHT_CANDIDATES = [
@@ -257,8 +241,6 @@ def _is_valid_shared_base(root: str) -> bool:
     for rel in _BASE_REQUIRED_FILES:
         if not os.path.exists(os.path.join(root, rel)):
             return False
-    if not _has_any_file(root, _TEXT_ENCODER_WEIGHT_CANDIDATES):
-        return False
     if not _has_any_file(root, _VAE_WEIGHT_CANDIDATES):
         return False
     return True
@@ -286,6 +268,25 @@ def _preferred_base_variant(precision: str, dtype: torch.dtype) -> str:
     if pref in ("fp16", "bf16"):
         return "fp16"
     return "fp32" if dtype == torch.float32 else "fp16"
+
+
+def _ensure_pager_base_files(model_variant: str, repo_id_source: str) -> str:
+    if model_variant not in ("fp16", "fp32"):
+        raise ValueError(f"Invalid model_variant={model_variant!r}")
+
+    base = _shared_base_dir(model_variant)
+    files = [
+        ("scheduler/scheduler_config.json", "scheduler/scheduler_config.json"),
+        ("vae/config.json", "vae/config.json"),
+    ]
+    if model_variant == "fp16":
+        files.append(("vae/diffusion_pytorch_model.fp16.safetensors", "vae/diffusion_pytorch_model.safetensors"))
+    else:
+        files.append(("vae/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.safetensors"))
+
+    for remote_path, rel_dst in files:
+        _ensure_pager_file(repo_id_source, remote_path, os.path.join(base, rel_dst))
+    return base
 
 
 def _ensure_pager_model_files(model_repo: str) -> str:
@@ -498,22 +499,18 @@ def _depth_viz_to_color_hwc(pred_viz: torch.Tensor) -> torch.Tensor:
 class DownloadAndLoadPaGeRModel:
     @classmethod
     def INPUT_TYPES(cls):
-        filename_choices = _conditioning_filename_choices(preferred=[EMPTY_PROMPT_FILENAME_PAGER])
         taesd_choices = _pager_taesd_choices()
         default_taesd = "taesd" if "taesd" in taesd_choices else taesd_choices[0]
         return {
             "required": {
                 "model_id": (PAGER_MODEL_IDS, {"default": "prs-eth/PaGeR-depth"}),
                 "precision": (["auto", "fp16", "bf16", "fp32"], {"default": "auto"}),
-                "use_precomputed_conditioning": ("BOOLEAN", {"default": False}),
-                "conditioning_filename": (filename_choices, {"default": EMPTY_PROMPT_FILENAME_PAGER}),
                 "keep_on_gpu": ("BOOLEAN", {"default": True}),
-                "vae_slicing": ("BOOLEAN", {"default": False, "advanced": True}),
                 "vae_tiling": ("BOOLEAN", {"default": False, "advanced": True}),
                 "use_comfy_taesd_vae": ("BOOLEAN", {"default": False}),
                 "taesd_vae_name": (taesd_choices, {"default": default_taesd, "advanced": True}),
                 "force_gpu": ("BOOLEAN", {"default": True, "advanced": True}),
-            }
+            },
         }
 
     RETURN_TYPES = ("PAGERMODEL",)
@@ -530,17 +527,13 @@ Weights are FP32 on disk but can be cast to FP16/BF16 at load time.
         self,
         model_id: str,
         precision: str,
-        use_precomputed_conditioning: bool = False,
-        conditioning_filename: str = EMPTY_PROMPT_FILENAME_PAGER,
         keep_on_gpu: bool = True,
-        vae_slicing: bool = False,
         vae_tiling: bool = False,
         use_comfy_taesd_vae: bool = False,
         taesd_vae_name: str = "taesd",
         force_gpu: bool = True,
     ):
         _require_module("diffusers", "pip install -r custom_nodes/Comfyui-marigold-intrinsics/requirements.txt")
-        _require_module("transformers", "pip install -r custom_nodes/Comfyui-marigold-intrinsics/requirements.txt")
         _require_module("omegaconf", "pip install -r custom_nodes/Comfyui-marigold-intrinsics/requirements.txt")
         _require_module("pytorch360convert", "pip install -r custom_nodes/Comfyui-marigold-intrinsics/requirements.txt")
         _require_module("huggingface_hub", "pip install -r custom_nodes/Comfyui-marigold-intrinsics/requirements.txt")
@@ -557,11 +550,8 @@ Weights are FP32 on disk but can be cast to FP16/BF16 at load time.
         config = {
             "model_id": model_id,
             "precision": precision,
-            "use_precomputed_conditioning": bool(use_precomputed_conditioning),
-            "conditioning_filename": str(conditioning_filename),
             "dtype": str(dtype),
             "keep_on_gpu": bool(keep_on_gpu),
-            "vae_slicing": bool(vae_slicing),
             "vae_tiling": bool(vae_tiling),
             "use_comfy_taesd_vae": bool(use_comfy_taesd_vae),
             "taesd_vae_name": str(taesd_vae_name),
@@ -600,14 +590,14 @@ Weights are FP32 on disk but can be cast to FP16/BF16 at load time.
                 f"[PaGeR Loader] shared base missing; downloading into shared base/{target_variant} from {pretrained_repo}"
             )
             try:
-                local_pretrained_dir = _ensure_shared_base_files(target_variant, pretrained_repo)
+                local_pretrained_dir = _ensure_pager_base_files(target_variant, pretrained_repo)
             except Exception as e:
                 if target_variant == "fp16":
                     # Some repos only publish fp32 weights; still keep shared-base layout.
                     print(
                         f"[PaGeR Loader] fp16 base download failed ({e}); retrying shared base/fp32 from {pretrained_repo}"
                     )
-                    local_pretrained_dir = _ensure_shared_base_files("fp32", pretrained_repo)
+                    local_pretrained_dir = _ensure_pager_base_files("fp32", pretrained_repo)
                 else:
                     raise
 
@@ -651,12 +641,10 @@ Weights are FP32 on disk but can be cast to FP16/BF16 at load time.
             try:
                 # PaGeR uses custom cubemap padding that requires face-batch=6.
                 # VAE slicing splits batch into 1-face chunks and breaks that assumption.
-                if vae_slicing:
-                    print("[PaGeR Loader] VAE slicing requested but unsupported for PaGeR cubemap padding; forcing disabled.")
                 pager.vae.disable_slicing()
                 print("[PaGeR Loader] VAE slicing: disabled (required by PaGeR)")
             except Exception as e:
-                print(f"[PaGeR Loader] Warning: could not set VAE slicing={vae_slicing}: {e}")
+                print(f"[PaGeR Loader] Warning: could not disable VAE slicing: {e}")
             try:
                 if vae_tiling:
                     pager.vae.enable_tiling(True)
@@ -665,34 +653,6 @@ Weights are FP32 on disk but can be cast to FP16/BF16 at load time.
                 print(f"[PaGeR Loader] VAE tiling: {'enabled' if vae_tiling else 'disabled'}")
             except Exception as e:
                 print(f"[PaGeR Loader] Warning: could not set VAE tiling={vae_tiling}: {e}")
-        if use_precomputed_conditioning:
-            try:
-                cond = _load_precomputed_conditioning(
-                    base_dir=local_pretrained_dir,
-                    dtype=dtype,
-                    device=device,
-                    filename=str(conditioning_filename),
-                )
-                if cond is not None:
-                    if hasattr(pager, "empty_encoding") and pager.empty_encoding.shape != cond.shape:
-                        print(
-                            "[PaGeR Loader] Precomputed conditioning shape mismatch; "
-                            f"expected {tuple(pager.empty_encoding.shape)}, got {tuple(cond.shape)}. "
-                            "Using model-generated conditioning."
-                        )
-                    else:
-                        pager.empty_encoding = cond
-                        print(
-                            f"[PaGeR Loader] Using precomputed conditioning: "
-                            f"{local_pretrained_dir}/{conditioning_filename}"
-                        )
-                else:
-                    print(
-                        f"[PaGeR Loader] Precomputed conditioning not found: "
-                        f"{local_pretrained_dir}/{conditioning_filename}"
-                    )
-            except Exception as e:
-                print(f"[PaGeR Loader] Failed to load precomputed conditioning: {e}")
         if modality in pager.unet:
             pager.unet[modality].eval()
 
@@ -706,7 +666,6 @@ Weights are FP32 on disk but can be cast to FP16/BF16 at load time.
             "repo_id": model_id,
             "pretrained_path": pretrained_repo,
             "keep_on_gpu": bool(keep_on_gpu),
-            "vae_slicing": bool(vae_slicing),
             "vae_tiling": bool(vae_tiling),
             "use_comfy_taesd_vae": bool(use_comfy_taesd_vae),
             "taesd_vae_name": str(taesd_vae_name),
@@ -785,8 +744,7 @@ class PaGeRInferCubemap:
                 print(f"[PaGeR Infer Cubemap] Warning: failed to disable VAE slicing: {e}")
         if hasattr(pipe, "vae"):
             print(
-                f"[PaGeR Infer Cubemap] vae_slicing={bool(getattr(pipe.vae, 'use_slicing', False))} "
-                f"vae_tiling={bool(getattr(pipe.vae, 'use_tiling', False))}"
+                f"[PaGeR Infer Cubemap] vae_tiling={bool(getattr(pipe.vae, 'use_tiling', False))}"
             )
 
         _pager_to(pipe, device, dtype)

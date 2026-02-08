@@ -128,7 +128,12 @@ class MarigoldIIDLighting:
                     pass
             else:
                 try:
-                    pipe.to(offload_device)
+                    offload_is_cpu = hasattr(offload_device, "type") and offload_device.type == "cpu"
+                    half_dtype = dtype in (torch.float16, torch.bfloat16)
+                    if offload_is_cpu and half_dtype:
+                        pipe.to(device)
+                    else:
+                        pipe.to(offload_device)
                 except Exception:
                     pass
             mm.soft_empty_cache()

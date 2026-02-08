@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from torch.nn import Conv2d
-from transformers import CLIPTextModel, CLIPTokenizer
 from diffusers import DDPMScheduler
 from diffusers.utils.import_utils import is_xformers_available
 from Marigold.unet.unet_2d_condition import UNet2DConditionModel
@@ -49,8 +48,6 @@ class Pager(nn.Module):
                 raise ValueError("All UNet checkpoints must use the same VAE positional encoding configuration.")
             
         self.noise_scheduler = DDPMScheduler.from_pretrained(pretrained_path, subfolder="scheduler", rescale_betas_zero_snr=True)
-        self.tokenizer    = CLIPTokenizer.from_pretrained(pretrained_path, subfolder="tokenizer", revision=None)
-        self.text_encoder = CLIPTextModel.from_pretrained(pretrained_path, subfolder="text_encoder", revision=None, variant=None)
         self.vae = AutoencoderKL.from_pretrained(pretrained_path, subfolder="vae", revision=None, variant=None, 
                                     use_RoPE = vae_use_RoPE)
         self.set_valid_pad_conv(self.vae)
@@ -58,10 +55,6 @@ class Pager(nn.Module):
         self.vae.requires_grad_(False)
         self.vae.to(self.device, dtype=self.weight_dtype)
         self.vae.eval()
-
-        self.text_encoder.requires_grad_(False)
-        self.text_encoder.to(self.device, dtype=self.weight_dtype)
-        self.text_encoder.eval()
 
 
         base_in_channels = 8
@@ -115,16 +108,39 @@ class Pager(nn.Module):
             PE_cubemap = get_positional_encoding(image_height, image_width)
             self.PE_cubemap = PE_cubemap.to(device=self.device, dtype=self.weight_dtype)
 
-    def prepare_empty_encoding(self):
-        with torch.inference_mode():
-            empty_token    = self.tokenizer([""], padding="max_length", truncation=True, return_tensors="pt").input_ids
-            empty_token    = empty_token.to(self.device)
-            empty_encoding = self.text_encoder(empty_token, return_dict=False)[0]
-            self.empty_encoding = empty_encoding.to(self.device, dtype=self.weight_dtype)
+    def _expected_cross_attention_dim(self):
+        dims = []
+        for unet in self.unet.values():
+            cfg = getattr(unet, "config", None)
+            dim = getattr(cfg, "cross_attention_dim", None)
+            if isinstance(dim, (tuple, list)) and len(dim) > 0:
+                dim = dim[0]
+            if isinstance(dim, int) and dim > 0 and dim not in dims:
+                dims.append(dim)
+        if len(dims) <= 1:
+            return dims[0] if dims else None
+        raise RuntimeError(f"Inconsistent cross_attention_dim across UNets: {dims}")
 
-        del empty_token
-        del self.text_encoder
-        del self.tokenizer
+    def _expected_text_token_length(self):
+        # SD2-style CLIP context length used by PaGeR checkpoints.
+        token_len = 77
+        for checkpoint_cfg in self.model_configs.values():
+            cfg = checkpoint_cfg.get("config", None)
+            if cfg is None:
+                continue
+            for key in ("tokenizer_max_length", "max_token_length", "max_length", "text_ctx_len"):
+                val = getattr(cfg, key, None)
+                if isinstance(val, int) and val > 0:
+                    token_len = int(val)
+                    return token_len
+        return token_len
+
+    def prepare_empty_encoding(self):
+        tokens = self._expected_text_token_length()
+        embed_dim = self._expected_cross_attention_dim()
+        if embed_dim is None:
+            raise RuntimeError("Could not infer UNet cross_attention_dim for empty conditioning.")
+        self.empty_encoding = torch.zeros((1, int(tokens), int(embed_dim)), device=self.device, dtype=self.weight_dtype)
 
 
     def forward(self, batch, modality):

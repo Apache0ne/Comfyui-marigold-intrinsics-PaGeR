@@ -2,39 +2,30 @@
 
 This custom node pack provides Marigold IID nodes and PaGeR ERP geometry nodes.
 ![pack](https://github.com/Apache0ne/Comfyui-marigold-intrinsics-PaGeR/blob/main/examples/node-examples.png)
+
 ## Included Nodes
 
-TODO: missing PaGeR-Normals 
-PaGer models 5/6
+TODO: missing PaGeR-Normals
+PaGeR models 5/6
 
 ### Marigold IID Loaders
 
 1. `Load Marigold IID Appearance Model` (`DownloadAndLoadMarigoldIIDAppearanceModel`)
 - Downloads and loads the Marigold appearance pipeline as `IIDMODEL`.
-- Supports `use_precomputed_conditioning`.
+- Uses hardcoded in-memory empty conditioning (no precomputed `.safetensors` path).
 
 2. `Load Marigold IID Lighting Model` (`DownloadAndLoadMarigoldIIDLightingModel`)
 - Downloads and loads the Marigold lighting pipeline as `IIDMODEL`.
-- Supports `use_precomputed_conditioning`.
+- Uses hardcoded in-memory empty conditioning (no precomputed `.safetensors` path).
 
 3. `Load Marigold IID Split (UNet/CLIP/VAE)` (`MarigoldIIDSplitLoader`)
 - Loads split components as Comfy `MODEL`, `CLIP`, `VAE`.
+- Uses runtime-minimal base files by default (scheduler + VAE); text assets are only fetched if `load_comfy_model_clip` is enabled.
 - Supports tiny VAEs, including TAESD-style VAE choices.
 
 4. `Translate Marigold Split -> IIDMODEL` (`MarigoldIIDSplitToIIDModel`)
 - Converts split-loaded `MODEL` + `CLIP` + `VAE` into `IIDMODEL`.
-- Supports precomputed conditioning and TAESD-compatible VAE adapters.
-
-### Marigold Conditioning
-
-1. `Load Marigold Base Text Encoder` (`LoadMarigoldBaseTextEncoder`)
-- Loads tokenizer and CLIP text encoder from shared base files.
-
-2. `Save Empty Prompt Conditioning` (`SaveEmptyPromptConditioning`)
-- Computes and saves empty-prompt text embedding to a `.safetensors` file.
-
-3. `Load Empty Prompt Conditioning` (`LoadEmptyPromptConditioning`)
-- Loads a saved empty-prompt embedding for reuse.
+- Uses hardcoded in-memory empty conditioning and TAESD-compatible VAE adapters.
 
 ### Marigold IID Inference
 
@@ -51,7 +42,7 @@ PaGer models 5/6
 
 1. `Load PaGeR Model` (`DownloadAndLoadPaGeRModel`)
 - Loads PaGeR depth or normal model.
-- Supports precomputed conditioning.
+- Uses hardcoded in-memory empty conditioning (no tokenizer/text encoder stage in loader runtime path).
 - Includes optional Comfy TAESD VAE backend (`use_comfy_taesd_vae`).
 
 2. `PaGeR Infer Cubemap (ERP)` (`PaGeRInferCubemap`)
@@ -86,19 +77,13 @@ For normals:
 2. `PaGeR Infer Cubemap (ERP)`.
 3. `PaGeR Normal Postprocess (ERP)`.
 
-## Precomputed Text Conditioning
+## Hardcoded Empty Conditioning
 
-Precomputed conditioning means reusing a saved empty-prompt embedding instead of generating it every run.
-
-How it works:
-1. Load tokenizer/text encoder once with `Load Marigold Base Text Encoder`.
-2. Save the empty-prompt embedding using `Save Empty Prompt Conditioning`.
-3. Enable `use_precomputed_conditioning` in model loader nodes, or load it with `Load Empty Prompt Conditioning`.
-
-Why it helps:
-1. Reduces repeated text-encoding work during inference setup.
-2. Lowers overhead and can improve throughput consistency in repeated runs.
-3. Can reduce transient VRAM pressure from extra text-encoding passes.
+All active loaders now use hardcoded in-memory zero embeddings for empty conditioning:
+1. No `.safetensors` empty-conditioning file is required.
+2. No precomputed-conditioning inputs are exposed on loader nodes.
+3. Marigold uses shape `[1, 2, C]`, where `C` is inferred from UNet `cross_attention_dim`.
+4. PaGeR uses shape `[1, T, C]`, where `T` defaults to SD2-style context length and `C` is inferred from UNet config.
 
 ## TAESD VAE Option
 
@@ -118,7 +103,7 @@ Tradeoff:
 
 This setup has been tested on an 8GB GPU with practical settings:
 1. Prefer `fp16` precision.
-2. Use precomputed conditioning.
+2. Use hardcoded in-memory empty conditioning (default).
 3. Enable TAESD VAE when memory is tight.
 4. Keep PaGeR as `Infer Cubemap -> Postprocess` (current default workflow).
 
@@ -130,15 +115,15 @@ Install with:
 pip install -r requirements.txt
 ```
 
-## 🎓 Citation
+## Citation
 
-Please cite our paper:  (Waiting for Citation)
+Please cite our paper: (Waiting for citation)
 
 ```bibtex
 Put citations here
 ```
 
-## 🎫 License
+## License
 
 This code of this work is licensed under the Apache License, Version 2.0 (as defined in the [LICENSE](LICENSE)).
 

@@ -11,14 +11,13 @@ import comfy.utils
 import folder_paths
 
 from .nodes_shared import (
-    EMPTY_PROMPT_FILENAME_MARIGOLD,
     MODEL_REPO_ID_APPEARANCE,
     MODEL_REPO_ID_LIGHTING,
     _cleanup_hf_cache,
-    _conditioning_filename_choices,
-    _ensure_base_files,
+    _ensure_base_runtime_files,
+    _ensure_base_text_files,
     _ensure_model_files,
-    _load_precomputed_conditioning,
+    _marigold_zero_empty_conditioning,
     _require_module,
     _select_torch_dtype,
 )
@@ -37,7 +36,6 @@ _TEXT_ENCODER_WEIGHTS = [
     "pytorch_model.fp16.bin",
     "pytorch_model.bin",
 ]
-
 
 def _first_file(path: str, filenames: list[str]) -> str | None:
     for name in filenames:
@@ -340,7 +338,7 @@ class MarigoldIIDSplitLoader:
     CATEGORY = "Marigold IID Loaders"
 
     DESCRIPTION = """
-Loads the Marigold IID UNet + text encoder as a standard ComfyUI MODEL/CLIP.
+Loads the Marigold IID UNet as ComfyUI MODEL and optionally loads CLIP when enabled.
 The VAE can be the Marigold base VAE or any TAESD/vae_approx selection from ComfyUI.
 """
 
@@ -390,18 +388,18 @@ The VAE can be the Marigold base VAE or any TAESD/vae_approx selection from Comf
         else:
             raise ValueError(f"Invalid model_kind={model_kind!r}")
 
-        base_dir = _ensure_base_files(clip_variant, repo_id)
+        base_dir = _ensure_base_runtime_files(clip_variant, repo_id)
         model_dir = _ensure_model_files(repo_id, model_kind, unet_variant)
 
         unet_path = _first_file(os.path.join(model_dir, "unet"), _DIFFUSERS_WEIGHTS)
         if unet_path is None:
             raise RuntimeError(f"Could not find UNet weights under {os.path.join(model_dir, 'unet')}")
 
-        text_encoder_path = _first_file(os.path.join(base_dir, "text_encoder"), _TEXT_ENCODER_WEIGHTS)
-        if text_encoder_path is None:
-            raise RuntimeError(f"Could not find text encoder weights under {os.path.join(base_dir, 'text_encoder')}")
-
         if load_comfy_model_clip:
+            _ensure_base_text_files(clip_variant, repo_id)
+            text_encoder_path = _first_file(os.path.join(base_dir, "text_encoder"), _TEXT_ENCODER_WEIGHTS)
+            if text_encoder_path is None:
+                raise RuntimeError(f"Could not find text encoder weights under {os.path.join(base_dir, 'text_encoder')}")
             model_options = {"dtype": unet_dtype}
             try:
                 model = comfy.sd.load_diffusion_model(unet_path, model_options=model_options)
@@ -468,15 +466,12 @@ The VAE can be the Marigold base VAE or any TAESD/vae_approx selection from Comf
 class MarigoldIIDSplitToIIDModel:
     @classmethod
     def INPUT_TYPES(cls):
-        filename_choices = _conditioning_filename_choices(preferred=[EMPTY_PROMPT_FILENAME_MARIGOLD])
         return {
             "required": {
                 "model": ("MODEL",),
                 "clip": ("CLIP",),
                 "vae": ("VAE",),
-                "use_precomputed_conditioning": ("BOOLEAN", {"default": False}),
-                "conditioning_filename": (filename_choices, {"default": EMPTY_PROMPT_FILENAME_MARIGOLD}),
-            }
+            },
         }
 
     RETURN_TYPES = ("IIDMODEL",)
@@ -494,11 +489,8 @@ Supports TAESD/vae_approx VAEs via a lightweight adapter.
         model,
         clip,
         vae,
-        use_precomputed_conditioning: bool = False,
-        conditioning_filename: str = EMPTY_PROMPT_FILENAME_MARIGOLD,
     ):
         _require_module("diffusers", "pip install -r custom_nodes/Comfyui-marigold-intrinsics/requirements.txt")
-        _require_module("transformers", "pip install -r requirements.txt")
 
         cfg = None
         if hasattr(model, "attachments"):
@@ -548,9 +540,8 @@ Supports TAESD/vae_approx VAEs via a lightweight adapter.
             raise ValueError(f"Invalid model_kind={model_kind!r}")
 
         from diffusers import DDIMScheduler, MarigoldIntrinsicsPipeline, UNet2DConditionModel
-        from transformers import CLIPTextModel, CLIPTokenizer
 
-        base_dir = _ensure_base_files(clip_variant, repo_id)
+        base_dir = _ensure_base_runtime_files(clip_variant, repo_id)
         model_dir = _ensure_model_files(repo_id, model_kind, unet_variant)
 
         with open(os.path.join(model_dir, "model_index.json"), "r", encoding="utf-8") as f:
@@ -560,13 +551,6 @@ Supports TAESD/vae_approx VAEs via a lightweight adapter.
             model_dir,
             subfolder="unet",
             torch_dtype=unet_dtype,
-            use_safetensors=True,
-            local_files_only=True,
-        )
-        tokenizer = CLIPTokenizer.from_pretrained(os.path.join(base_dir, "tokenizer"), local_files_only=True)
-        text_encoder = CLIPTextModel.from_pretrained(
-            os.path.join(base_dir, "text_encoder"),
-            torch_dtype=clip_dtype,
             use_safetensors=True,
             local_files_only=True,
         )
@@ -587,13 +571,14 @@ Supports TAESD/vae_approx VAEs via a lightweight adapter.
             unet=unet,
             vae=vae_adapter,
             scheduler=scheduler,
-            text_encoder=text_encoder,
-            tokenizer=tokenizer,
+            text_encoder=None,
+            tokenizer=None,
             prediction_type=cfg_file.get("prediction_type"),
             target_properties=cfg_file.get("target_properties"),
             default_denoising_steps=cfg_file.get("default_denoising_steps"),
             default_processing_resolution=cfg_file.get("default_processing_resolution"),
         )
+        pipe.empty_text_embedding = _marigold_zero_empty_conditioning(unet=unet, dtype=unet_dtype, device=device)
 
         try:
             pipe.set_progress_bar_config(disable=True)
@@ -604,38 +589,6 @@ Supports TAESD/vae_approx VAEs via a lightweight adapter.
             pipe.enable_xformers_memory_efficient_attention()
         except Exception as e:
             print(f"[Marigold IID] xFormers not enabled: {e}")
-
-        if use_precomputed_conditioning:
-            try:
-                cond = _load_precomputed_conditioning(
-                    base_dir=base_dir,
-                    dtype=unet_dtype,
-                    device=device,
-                    filename=str(conditioning_filename),
-                )
-                if cond is not None:
-                    expected_tokens = int(
-                        tokenizer(
-                            "",
-                            padding="do_not_pad",
-                            max_length=tokenizer.model_max_length,
-                            truncation=True,
-                            return_tensors="pt",
-                        ).input_ids.shape[1]
-                    )
-                    if cond.ndim != 3 or int(cond.shape[1]) != expected_tokens:
-                        print(
-                            "[Marigold IID] Precomputed conditioning shape mismatch; "
-                            f"expected [1,{expected_tokens},C], got {tuple(cond.shape)}. "
-                            "Using runtime-generated conditioning."
-                        )
-                    else:
-                        pipe.empty_text_embedding = cond
-                        print(f"[Marigold IID] Using precomputed conditioning: {base_dir}/{conditioning_filename}")
-                else:
-                    print(f"[Marigold IID] Precomputed conditioning not found: {base_dir}/{conditioning_filename}")
-            except Exception as e:
-                print(f"[Marigold IID] Failed to load precomputed conditioning: {e}")
 
         pipe = pipe.to(device)
 
